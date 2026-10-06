@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<title>Keyboard Diagnostics</title>
+<style>
+  :root { --bg: #0f1218; --fg: #e7ebf2; --muted: #8a93a5; --accent: #6ea8fe; --line: #252b36; --warn: #f0b85a; --bad: #f27474; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; height: var(--frame-h, 100dvh); overflow: hidden; }
+  header { padding: 8px 12px; border-bottom: 1px solid var(--line); flex: none; }
+  header h1 { font-size: 15px; margin: 0 0 6px; }
+  .opts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); }
+  .opts label { display: inline-flex; align-items: center; gap: 4px; }
+  .bar { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .bar button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+    border: 1px solid var(--line); background: #1a1f29; color: var(--fg); }
+  #state { font: 12px ui-monospace, monospace; color: var(--muted); margin-top: 6px; white-space: pre-wrap; }
+  #log { flex: 1; overflow-y: auto; padding: 6px 12px; font: 11.5px/1.4 ui-monospace, Menlo, monospace; }
+  #log div { border-bottom: 1px solid #1a1f29; padding: 1px 0; word-break: break-word; }
+  #log .t { color: var(--muted); }
+  #log .focus { color: var(--accent); }
+  #log .vv { color: #9ad29a; }
+  #log .key { color: var(--warn); }
+  #log .bad { color: var(--bad); font-weight: 600; }
+  #host { flex: none; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Keyboard diagnostics</h1>
+  <div class="opts">
+    <label><input type="checkbox" id="optShadow" checked> composer in shadow DOM</label>
+    <label><input type="checkbox" id="optBlur" checked> blur on send (touch)</label>
+    <label><input type="checkbox" id="optRerender"> re-render composer on send</label>
+    <label><input type="checkbox" id="optSel"> log selectionchange</label>
+  </div>
+  <div class="bar">
+    <button id="copy">Copy log</button>
+    <button id="clear">Clear</button>
+    <button id="mark">Mark ★</button>
+  </div>
+  <div id="state"></div>
+</header>
+<div id="log" aria-live="off"></div>
+<div id="host"></div>
+
+<script>
+(() => {
+  const logEl = document.getElementById('log');
+  const stateEl = document.getElementById('state');
+  const t0 = performance.now();
+  const lines = [];
+  const coarse = matchMedia('(pointer: coarse)');
+  const vv = window.visualViewport;
+
+  // Persist across a reload so a crash or navigation does not lose the trace.
+  try { (JSON.parse(localStorage.getItem('kbd-diag-log') || '[]')).forEach((l) => lines.push(l)); } catch (_e) {}
+
+  function deepActive() {
+    let el = document.activeElement;
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+    return el;
+  }
+  function describe(el) {
+    if (!el) return 'null';
+    if (el === window) return 'window';
+    if (el === document) return 'document';
+    if (el.nodeType !== 1) return el.nodeName;
+    let s = el.tagName.toLowerCase();
+    if (el.id) s += '#' + el.id;
+    const d = el.getAttribute && el.getAttribute('data-role');
+    if (d) s += '[' + d + ']';
+    return s;
+  }
+  function stamp() { return ((performance.now() - t0) / 1000).toFixed(3).padStart(8); }
+  function vvInfo() { return vv ? `vv=${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetTop)}` : 'vv=n/a'; }
+
+  function render(line) {
+    const div = document.createElement('div');
+    div.className = line.c || '';
+    div.innerHTML = '<span class="t"></span> ';
+    div.firstChild.textContent = line.t;
+    div.appendChild(document.createTextNode(line.m));
+    logEl.appendChild(div);
+  }
+  function log(msg, cls) {
+    const line = { t: stamp(), m: `${msg}  | active=${describe(deepActive())} hasFocus=${document.hasFocus()} ${vvInfo()}`, c: cls || '' };
+    lines.push(line);
+    if (lines.length > 2000) lines.splice(0, lines.length - 2000);
+    try { localStorage.setItem('kbd-diag-log', JSON.stringify(lines.slice(-600))); } catch (_e) {}
+    render(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  lines.forEach(render);
+  if (lines.length) log('--- page (re)loaded; lines above are from before ---', 'bad');
+
+  function showState() {
+    stateEl.textContent =
+      `pointer:coarse=${coarse.matches}  hover:none=${matchMedia('(hover: none)').matches}  ` +
+      `inner=${innerWidth}x${innerHeight}  ${vvInfo()}\nUA: ${navigator.userAgent}`;
+  }
+  showState();
+
+  // ── Window / document level ────────────────────────────────────────────────
+  window.addEventListener('focus', () => log('window focus', 'focus'));
+  window.addEventListener('blur', () => log('window blur', 'bad'));
+  document.addEventListener('visibilitychange', () => log('visibilitychange → ' + document.visibilityState, 'bad'));
+  window.addEventListener('pagehide', () => log('pagehide', 'bad'));
+  window.addEventListener('pageshow', () => log('pageshow'));
+  window.addEventListener('resize', () => { log(`window resize inner=${innerWidth}x${innerHeight}`, 'vv'); showState(); });
+  if (vv) {
+    vv.addEventListener('resize', () => {
+      document.documentElement.style.setProperty('--frame-h', Math.round(vv.height) + 'px');
+      log('visualViewport resize', 'vv'); showState();
+    });
+    vv.addEventListener('scroll', () => log('visualViewport scroll', 'vv'));
+  }
+  if (navigator.virtualKeyboard) {
+    navigator.virtualKeyboard.addEventListener('geometrychange', (e) => {
+      const r = e.target.boundingRect;
+      log(`virtualKeyboard geometrychange ${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.y)}`, 'vv');
+    });
+  }
+  document.addEventListener('focusin', (e) => log('doc focusin target=' + describe(e.composedPath()[0]), 'focus'), true);
+  document.addEventListener('focusout', (e) => log('doc focusout target=' + describe(e.composedPath()[0]) +
+    ' related=' + describe(e.relatedTarget), 'focus'), true);
+  for (const type of ['pointerdown', 'pointerup', 'click', 'touchstart', 'touchend', 'contextmenu']) {
+    document.addEventListener(type, (e) => {
+      const p = e.composedPath()[0];
+      log(`${type} on ${describe(p)} at ${Math.round(e.clientX ?? (e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientX : -1))},` +
+          `${Math.round(e.clientY ?? (e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientY : -1))}` +
+          (e.pointerType ? ' type=' + e.pointerType : '') + ` trusted=${e.isTrusted}`);
+    }, true);
+  }
+  document.addEventListener('selectionchange', () => {
+    if (document.getElementById('optSel').checked) log('selectionchange');
+  });
+
+  // ── The composer (mirrors the dashboard's: form > textarea + send button) ──
+  const host = document.getElementById('host');
+  let draft = '';
+  let renders = 0;
+
+  function composerHtml() {
+    return `<style>
+      form { display: flex; gap: 8px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); align-items: flex-end; background: #141821; }
+      textarea { flex: 1; resize: none; font: 16px/1.35 system-ui, sans-serif; padding: 8px 10px; border-radius: 10px;
+        border: 1px solid #2a3140; background: #0f1218; color: #e7ebf2; max-height: 40vh; }
+      button { font: 18px system-ui; width: 44px; height: 40px; border-radius: 10px; border: 0; background: #6ea8fe; color: #0f1218; }
+    </style>
+    <form data-role="form">
+      <textarea rows="1" id="ta" data-role="composer" placeholder="Type or dictate here…" autocomplete="off"></textarea>
+      <button type="submit" id="send" data-role="send" aria-label="Send">&#10148;</button>
+    </form>`;
+  }
+
+  function mountComposer({ refocus = false } = {}) {
+    renders += 1;
+    const useShadow = document.getElementById('optShadow').checked;
+    host.innerHTML = '';
+    let root;
+    if (useShadow) {
+      const el = document.createElement('div');
+      host.appendChild(el);
+      root = el.attachShadow({ mode: 'open' });
+    } else {
+      root = host;
+    }
+    root.innerHTML = composerHtml();
+    const form = root.querySelector('form');
+    const ta = root.querySelector('textarea');
+    ta.value = draft;
+    const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+    grow();
+
+    ta.addEventListener('focus', () => log('textarea focus', 'focus'));
+    ta.addEventListener('blur', () => log('textarea blur', 'bad'));
+    ta.addEventListener('keydown', (e) => {
+      log(`keydown key=${JSON.stringify(e.key)} code=${e.code} keyCode=${e.keyCode} ctrl=${e.ctrlKey} meta=${e.metaKey} composing=${e.isComposing}`, 'key');
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); form.requestSubmit(); }
+    });
+    ta.addEventListener('keyup', (e) => log(`keyup key=${JSON.stringify(e.key)} keyCode=${e.keyCode}`, 'key'));
+    ta.addEventListener('beforeinput', (e) => log(`beforeinput type=${e.inputType} data=${JSON.stringify(e.data)} composing=${e.isComposing}`, 'key'));
+    ta.addEventListener('input', (e) => {
+      draft = ta.value; grow();
+      log(`input type=${e.inputType} len=${ta.value.length}`, 'key');
+    });
+    for (const type of ['compositionstart', 'compositionupdate', 'compositionend']) {
+      ta.addEventListener(type, (e) => log(`${type} data=${JSON.stringify(e.data)}`, 'key'));
+    }
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      log(`SUBMIT submitter=${describe(e.submitter)} trusted=${e.isTrusted} text=${JSON.stringify(ta.value.slice(0, 40))}`, 'bad');
+      const text = ta.value;
+      if (!text.trim()) { log('  (empty — ignored, as the dashboard does)'); return; }
+      if (coarse.matches && document.getElementById('optBlur').checked) { log('  → blur() (the #286 behaviour)', 'bad'); ta.blur(); }
+      draft = '';
+      ta.value = ''; grow();
+      log(`  "sent": ${JSON.stringify(text.slice(0, 60))}`);
+      if (document.getElementById('optRerender').checked) setTimeout(() => mountComposer(), 300);
+    });
+    if (refocus) ta.focus();
+    log(`composer mounted (#${renders}, shadow=${useShadow})`);
+  }
+  mountComposer();
+  document.getElementById('optShadow').addEventListener('change', () => mountComposer());
+
+  // ── Toolbar ────────────────────────────────────────────────────────────────
+  // These buttons must not take focus from the textarea, or tapping them
+  // would itself dismiss the keyboard and pollute the trace.
+  for (const id of ['copy', 'clear', 'mark']) {
+    document.getElementById(id).addEventListener('pointerdown', (e) => e.preventDefault());
+  }
+  document.getElementById('copy').addEventListener('click', async () => {
+    const text = lines.map((l) => `${l.t} ${l.m}`).join('\n') + '\n\n' + stateEl.textContent;
+    try { await navigator.clipboard.writeText(text); log('log copied to clipboard'); }
+    catch (_e) {
+      const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); ta.remove(); log('log copied (fallback)');
+    }
+  });
+  document.getElementById('clear').addEventListener('click', () => {
+    lines.length = 0; logEl.innerHTML = '';
+    try { localStorage.removeItem('kbd-diag-log'); } catch (_e) {}
+    log('log cleared');
+  });
+  document.getElementById('mark').addEventListener('click', () => log('★★★ MARK ★★★', 'bad'));
+  log('ready');
+})();
+</script>
+</body>
+</html>
