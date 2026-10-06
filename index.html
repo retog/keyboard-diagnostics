@@ -2,7 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<meta name="viewport" id="vp" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<script>
+  // Test modes, chosen by URL so they apply from the first paint:
+  //   ?iw=resizes-content | resizes-visual | overlays-content | none
+  //   ?vk=overlay   (VirtualKeyboard API: keyboard overlays content)
+  (() => {
+    const q = new URLSearchParams(location.search);
+    const iw = q.get('iw') || 'resizes-content';
+    const base = 'width=device-width, initial-scale=1, viewport-fit=cover';
+    document.getElementById('vp').setAttribute('content', iw === 'none' ? base : `${base}, interactive-widget=${iw}`);
+    if (q.get('vk') === 'overlay' && navigator.virtualKeyboard) navigator.virtualKeyboard.overlaysContent = true;
+  })();
+</script>
 <title>Keyboard Diagnostics</title>
 <style>
   :root { --bg: #0f1218; --fg: #e7ebf2; --muted: #8a93a5; --accent: #6ea8fe; --line: #252b36; --warn: #f0b85a; --bad: #f27474; }
@@ -37,6 +49,7 @@
     <label><input type="checkbox" id="optRerender"> re-render composer on send</label>
     <label><input type="checkbox" id="optSel"> log selectionchange</label>
   </div>
+  <div class="opts" id="modes"></div>
   <div class="bar">
     <button id="copy">Copy log</button>
     <button id="clear">Clear</button>
@@ -97,10 +110,30 @@
   lines.forEach(render);
   if (lines.length) log('--- page (re)loaded; lines above are from before ---', 'bad');
 
+  // Mode links: each reloads the page in one viewport configuration.
+  (() => {
+    const q = new URLSearchParams(location.search);
+    const cur = (q.get('iw') || 'resizes-content') + (q.get('vk') === 'overlay' ? '+vk' : '');
+    const modes = [
+      ['resizes-content', '?iw=resizes-content'],
+      ['resizes-visual', '?iw=resizes-visual'],
+      ['overlays-content', '?iw=overlays-content'],
+      ['none', '?iw=none'],
+      ['VK overlay', '?iw=resizes-content&vk=overlay'],
+    ];
+    const el = document.getElementById('modes');
+    el.innerHTML = 'Mode: ' + modes.map(([label, href]) => {
+      const key = new URLSearchParams(href.slice(1));
+      const k = (key.get('iw') || '') + (key.get('vk') === 'overlay' ? '+vk' : '');
+      return k === cur ? `<b>${label}</b>` : `<a href="${href}" style="color:var(--accent)">${label}</a>`;
+    }).join(' · ');
+  })();
+
   function showState() {
     stateEl.textContent =
       `pointer:coarse=${coarse.matches}  hover:none=${matchMedia('(hover: none)').matches}  ` +
-      `inner=${innerWidth}x${innerHeight}  ${vvInfo()}\nUA: ${navigator.userAgent}`;
+      `inner=${innerWidth}x${innerHeight}  ${vvInfo()}\nviewport: ${document.getElementById('vp').content}` +
+      `  vk.overlays=${navigator.virtualKeyboard ? navigator.virtualKeyboard.overlaysContent : 'n/a'}\nUA: ${navigator.userAgent}`;
   }
   showState();
 
